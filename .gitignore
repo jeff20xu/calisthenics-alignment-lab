@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+models/
+*.mp4
+*.avi
+*.mov
+*.webm
+.streamlit/secrets.toml
+.env
+.env.*
+!.env.example
+*.pem
+*.key
