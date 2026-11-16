@@ -105,6 +105,8 @@ bun test ./camera/test_geometry.mjs
 
 Browser smoke verification used an isolated fake camera fed a rotated public pose image, not a person's physical webcam. It exercised real browser-local MediaPipe inference, annotated video, live measurements, audio-disabled tracks, Stop/Start, settings resets, and consent withdrawal. These fixtures demonstrate pipeline operation, not calisthenics accuracy.
 
+The deployed public URL was also exercised with browser-local live inference and camera shutdown. After switching from live mode to upload mode, a 3-second smoke clip completed server analysis and produced a playable annotated video and CSV/JSON download controls. This verifies deployment and mode transitions, not pose accuracy or real-world repetition-counting accuracy.
+
 No genuine handstand/push-up/planche dataset has been evaluated. Before reporting accuracy or making training recommendations, collect consenting side-view clips, manually annotate joints/repetitions, and evaluate angle error, tracking coverage, timing, and failure cases on held-out footage.
 
 ## Project structure
