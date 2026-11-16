@@ -4,6 +4,8 @@ Analyze handstands, handstand push-ups, and planches from **uploaded videos or a
 
 Repository: https://github.com/jeff20xu/calisthenics-alignment-lab
 
+Public app: https://calisthenics-alignment-lab.streamlit.app/
+
 ## Features
 
 - Handstand wrist–shoulder stacking, shoulder opening, elbow extension, and body-line measurements.
@@ -27,28 +29,30 @@ py -3.13 -m venv .venv
 
 After installation, Windows users can double-click `Launch.bat`. Open http://127.0.0.1:8511. On Linux/macOS, use `python3 -m venv .venv`, activate `.venv`, install the same requirements, then run `streamlit run app.py`.
 
-The official full pose model downloads into `models/` on first analysis and is reused. Model weights, private videos, virtual environments, and credentials are excluded from version control.
+Uploaded-video analysis downloads the official full pose model into `models/` on first use and reuses it. Live analysis loads the browser runtime and model separately from their public hosts. Model weights, private videos, virtual environments, and credentials are excluded from version control.
 
 ## Live camera
 
 1. Film one athlete from the side using a fixed, level camera; keep wrists through ankles visible.
 2. Select the skill, camera-facing anatomical side, and planche variation if appropriate.
-3. Choose **Live camera** and read the server-processing notice.
-4. Give consent, press **Start**, and allow browser camera access. Audio is never requested.
-5. Inspect the returned joint overlay and latest measurements.
-6. Press **Stop** when finished. Restarting begins a new analysis. Changing analysis settings resets calibration and counts. Switching to uploads revokes consent and stops the live connection.
+3. Choose **Live camera** and read the on-device processing notice.
+4. Give consent, press **Start camera**, and allow browser camera access. Audio is never requested.
+5. Inspect the joint overlay and latest measurements.
+6. Press **Stop camera** when finished. Restarting begins a new analysis. Changing analysis settings resets calibration and counts. Leaving live mode, withdrawing consent, or hiding the browser tab stops the camera; restart explicitly when you return.
 
-A camera requires HTTPS or localhost. The default public STUN server is sufficient for some networks, not all. A hosted deployment or restrictive network may require TURN; see deployment below. The app processes only the latest queued frame, rather than accumulating an ever-growing inference backlog. It does not record the live stream.
+A camera requires HTTPS or localhost. Inference runs on your device using MediaPipe WebAssembly; no WebRTC relay, STUN, TURN, or account credentials are needed. The first start downloads the runtime and model from `cdn.jsdelivr.net` and `storage.googleapis.com`. Content blockers or network restrictions may prevent those downloads. A slow device may produce gaps in posture timing or miss repetitions; this is not a guaranteed real-time frame rate.
 
 ## Video upload
 
 Choose **Video upload** and upload an MP4/MOV/AVI/WebM clip of at most 3 minutes and 200 MB. Select **Analyze video**, review the overlay and charts, and download results. MP4 exports have no audio.
 
-Both modes use the same `FrameTracker` and measurement formulas. Uploaded videos are sampled at no more than 15 fps and resized to at most 960 pixels in either dimension. Timing assumes constant-frame-rate input; convert variable-frame-rate clips before analysis when precise timing matters.
+Uploaded videos are sampled at no more than 15 fps and resized to at most 960 pixels in either dimension. Timing assumes constant-frame-rate input; convert variable-frame-rate clips before analysis when precise timing matters. Browser live analysis also targets at most 15 fps and 960-pixel frames. The Python upload tracker and JavaScript live tracker implement the same measurement definitions, but use separate pose runtimes; their results need not be numerically identical.
 
 ## Privacy and public hosting
 
-On localhost, your own computer processes the frames. On a hosted app, **uploaded videos and live frames are sent to the app server**. Inference does not call a separate remote AI service. Upload temporary files are deleted after analysis; preview/export results remain in the session's server memory until released. Live processing retains the latest measurements rather than a recording. Only use footage and camera views you have permission to share with the host.
+**Live frames and measurements stay in your browser.** The component requests video only, does not record it, and sends neither frames nor measurement values to the app server. Model/runtime downloads still contact their public hosts, and Streamlit still handles the app's settings and page connection.
+
+**Uploaded videos are processed by the app server.** On localhost this is your computer; on the public app it is the hosting provider. Inference does not call a separate remote AI service. Upload temporary files are deleted after analysis; preview/export results remain in the session's server memory until released. Only upload footage you have permission to share with the host.
 
 ### Streamlit Community Cloud
 
@@ -57,19 +61,7 @@ On localhost, your own computer processes the frames. On a hosted app, **uploade
 3. Choose Python **3.13** under Advanced settings.
 4. Deploy and share the resulting HTTPS `streamlit.app` URL. Configure public viewer access if prompted.
 
-`requirements.txt`, `packages.txt`, and `.streamlit/config.toml` are included. GitHub itself hosts the source code, not this Python application's running server. Free hosting resources are shared and limited; multiple simultaneous pose streams may be slow.
-
-### Optional TURN configuration
-
-Set `ICE_SERVERS` to a JSON array in an environment variable or Streamlit secrets. Include your provider's STUN/TURN URLs and limited-use TURN credentials. Never put API keys or a real `secrets.toml` in GitHub. `.streamlit/secrets.toml` and `.env` are ignored.
-
-Example **format only**, using reserved example domains, not a working relay:
-
-```toml
-ICE_SERVERS = '[{"urls":["stun:stun.l.google.com:19302"]},{"urls":["turns:relay.example.org:443?transport=tcp"],"username":"YOUR_RELAY_USERNAME","credential":"YOUR_RELAY_PASSWORD"}]'
-```
-
-TURN connection credentials must be delivered to the browser for WebRTC to connect. Use restricted, short-lived relay credentials, not account API keys. No TURN service or credentials are bundled, and worldwide live connectivity cannot be guaranteed by STUN alone.
+`requirements.txt`, `packages.txt`, and `.streamlit/config.toml` are included. GitHub hosts the source code, not the running Python application. Live inference uses each visitor's device; uploaded-video processing shares the host's limited CPU and memory. No deployment secrets are required. Never commit credentials or private videos.
 
 ## Measurement definitions
 
@@ -106,27 +98,29 @@ These educational assumptions are not individualized anthropometric measurements
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -v
+bun test ./camera/test_geometry.mjs
 ```
 
-15 geometry/tracker regression tests passed locally, covering angle geometry, scale invariance, the explicit gravity formula, repetition transitions, tracking-loss resets, actual elapsed hold time, submillisecond timestamp ordering, dimension changes, and resource cleanup.
+15 Python geometry/tracker regression tests passed locally, covering angle geometry, scale invariance, the explicit gravity formula, repetition transitions, tracking-loss resets, actual elapsed hold time, submillisecond timestamp ordering, dimension changes, and resource cleanup. The browser geometry suite has 16 passing cases covering geometry, calibration, continuity, confidence, repetition transitions, and input validation.
 
-Browser smoke verification used an isolated fake camera fed a rotated public pose image, not a person's physical webcam. It exercised real browser WebRTC, MediaPipe inference, returned annotated video, live measurements, audio-disabled tracks, Stop/Start, and the live-to-upload transition. Uploaded-video analysis remained functional after live shutdown. These fixtures demonstrate pipeline operation, not calisthenics accuracy.
+Browser smoke verification used an isolated fake camera fed a rotated public pose image, not a person's physical webcam. It exercised real browser-local MediaPipe inference, annotated video, live measurements, audio-disabled tracks, Stop/Start, settings resets, and consent withdrawal. These fixtures demonstrate pipeline operation, not calisthenics accuracy.
 
 No genuine handstand/push-up/planche dataset has been evaluated. Before reporting accuracy or making training recommendations, collect consenting side-view clips, manually annotate joints/repetitions, and evaluate angle error, tracking coverage, timing, and failure cases on held-out footage.
 
 ## Project structure
 
-- `app.py`: Streamlit modes, consent, charts, and downloads.
-- `analyzer.py`: shared `FrameTracker`, model acquisition, and uploaded-video export.
-- `live.py`: per-connection WebRTC processing, thread-safe measurements, and ICE configuration.
-- `biomechanics.py`: joint geometry, posture filtering, and repetition state machine.
-- `test_biomechanics.py`, `test_tracker.py`: deterministic behavior regressions.
+- `app.py`: Streamlit input modes, settings, charts, and downloads.
+- `analyzer.py`: Python `FrameTracker`, model acquisition, and uploaded-video export.
+- `biomechanics.py`: Python joint geometry, posture filtering, and repetition state machine.
+- `camera/index.html`, `camera/app.mjs`: browser-local camera, MediaPipe runtime, overlay, and consent lifecycle.
+- `camera/geometry.mjs`: browser geometry, calibration, posture timing, and repetition state.
+- `test_biomechanics.py`, `test_tracker.py`, `camera/test_geometry.mjs`: deterministic behavior regressions.
 - `packages.txt`, `.streamlit/config.toml`: public hosting configuration.
 
 ## References
 
 - [MediaPipe Pose Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker/python)
-- [streamlit-webrtc](https://github.com/whitphx/streamlit-webrtc)
+- [MediaPipe Pose Landmarker for web](https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker/web_js)
 - [Streamlit deployment](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy)
 - [Official pose model](https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task)
 - [Smoke-test image](https://storage.googleapis.com/mediapipe-assets/pose.jpg)

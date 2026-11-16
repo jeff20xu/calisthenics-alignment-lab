@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>On-device live pose analysis</title>
+  <style>
+    :root { color-scheme: light; --background: #fff; --secondary: #f0f2f6; --text: #31333f; --primary: #be2942; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--background); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+    main { padding: 2px 1px 12px; }
+    p { margin: 0 0 12px; }
+    .notice, #status { padding: 12px; border-radius: 8px; background: var(--secondary); }
+    #status { margin-top: 12px; overflow-wrap: anywhere; border-left: 4px solid var(--primary); }
+    #status[data-level="error"] { border-left-color: #d13c45; }
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+    button { border: 1px solid var(--text); border-radius: 7px; padding: 9px 18px; background: var(--background); color: var(--text); font: inherit; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }
+    label { display: flex; gap: 9px; align-items: flex-start; }
+    input { margin-top: 5px; accent-color: var(--primary); }
+    #preview { display: block; width: 100%; max-height: 520px; object-fit: contain; background: #101318; border-radius: 8px; margin: 12px 0; }
+    #preview[hidden] { display: none; }
+    .summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+    .summary div { padding: 10px; border-radius: 7px; background: var(--secondary); }
+    .summary span { display: block; font-size: .85rem; }
+    .summary strong { display: block; font-size: 1.4rem; font-weight: 600; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--secondary); }
+    th:last-child, td:last-child { text-align: right; white-space: nowrap; }
+    caption { text-align: left; font-weight: 600; padding-bottom: 6px; }
+    details { margin-top: 15px; }
+    summary { cursor: pointer; font-weight: 600; }
+    details p { margin-top: 10px; }
+    .small { font-size: .88rem; }
+    @media (max-width: 480px) { .summary { gap: 6px; } .summary div { padding: 6px; } .summary strong { font-size: 1.15rem; } th, td { padding: 6px 4px; } }
+  </style>
+</head>
+<body>
+<main id="camera-app">
+  <p class="notice"><strong>Live camera frames and measurements stay on your device.</strong> Pose inference runs in this browser; neither frames nor metrics are sent to the app server. No recording or microphone access. Starting downloads the official MediaPipe runtime and pose model from their public hosts.</p>
+  <label><input id="consent" type="checkbox"><span>I consent to using my camera for on-device live analysis. Unchecking this stops the camera.</span></label>
+  <div class="controls">
+    <button id="start" type="button" disabled>Start camera</button>
+    <button id="stop" type="button" disabled>Stop camera</button>
+  </div>
+  <p id="status" role="status" aria-live="polite">Loading camera controls…</p>
+  <p id="reset-notice" class="small" role="status" hidden></p>
+  <canvas id="preview" hidden aria-label="Live camera with tracked joints and joint angles"></canvas>
+  <video id="source" autoplay muted playsinline hidden></video>
+  <div class="summary" aria-label="Session measurements">
+    <div><span>Measured frames</span><strong id="measured">—</strong></div>
+    <div><span>Analysis elapsed</span><strong id="elapsed">—</strong></div>
+    <div><span id="count-label">Longest tracked posture</span><strong id="count">—</strong></div>
+  </div>
+  <p id="calibration" class="small">The first 10 reliable frames calibrate torso scale. Keep your whole body visible and the camera fixed and level.</p>
+  <p id="variation" class="small" hidden></p>
+  <table>
+    <caption>Latest measurements</caption>
+    <thead><tr><th scope="col">Measurement</th><th scope="col">Value</th></tr></thead>
+    <tbody id="metrics"></tbody>
+  </table>
+  <details>
+    <summary>Limitations and camera troubleshooting</summary>
+    <p>Use HTTPS (or localhost), press Start, and allow camera access. If permission is denied, enable camera access in your browser site settings, reload if needed, and press Start again. If embedded elsewhere, the host must permit camera access for this iframe. Close other apps using your camera. If no camera is available, use video upload instead.</p>
+    <p>The runtime and model require a working connection to cdn.jsdelivr.net and storage.googleapis.com. If downloading fails, check content blockers or network restrictions and try Start again. Camera frames are not uploaded to these hosts. Slow devices may process fewer than 15 frames per second; skipped frames are not queued.</p>
+    <p>Film one athlete side-on, with wrists through ankles visible. Poor light, occlusion, foreshortening, the wrong visible side, or detector orientation can prevent tracking. Missing or low-confidence joints produce gaps, not invented measurements. Inspect the overlay: even confident landmarks can be wrong. The preview is not mirrored; left/right means the athlete’s anatomical side.</p>
+    <p>All measurements are 2-D estimates, not medical advice, balance scores, or measured joint torque. Tracked posture duration is not proof of an unsupported hold: walls, assistance, and contact are not detected. The optional gravitational-moment estimate covers only a simplified static trunk-and-leg model, not net shoulder torque.</p>
+    <p>Push-up counts require sustained straight arms (at least 160°), bend (at most 100°), then straight arms again in the selected inverted posture. Partial repetitions and tracking gaps do not count as full reps. Calibration assumes an unforeshortened torso. Changing sidebar settings resets calibration, time, and counts. Hiding or leaving this page stops the camera; press Start to resume a fresh session.</p>
+  </details>
+</main>
+<script type="module">
+  import('./app.mjs').catch(() => {
+    document.getElementById('status').textContent = 'Camera controls could not load. Reload the page or use video upload.';
+    document.getElementById('status').dataset.level = 'error';
+    window.parent.postMessage({isStreamlitMessage: true, type: 'streamlit:componentReady', apiVersion: 1}, '*');
+    window.parent.postMessage({isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: document.getElementById('camera-app').offsetHeight}, '*');
+  });
+</script>
+</body>
+</html>

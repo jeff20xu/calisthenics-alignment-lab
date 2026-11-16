@@ -1,184 +1,22 @@
 from pathlib import Path
 import hashlib
 import json
-import math
-import os
 import tempfile
 import plotly.express as px
 import streamlit as st
-from analyzer import analyze, ensure_model
+import streamlit.components.v1 as components
+from analyzer import analyze
 from biomechanics import METRICS, observations
-from live import LiveProcessor, ice_configuration
-from streamlit_webrtc import WebRtcMode, webrtc_streamer
 
 
-def revoke_live_camera():
-    # Non-widget state is authoritative across component and fragment reruns.
-    st.session_state['_camera_consent'] = False
-    st.session_state['live_consent'] = False
-    if not st.session_state.get('_live_stopping'):
-        st.session_state['_live_generation'] = st.session_state.get('_live_generation', 0) + 1
-    st.session_state['_live_stopping'] = True
-    context = st.session_state.get('_live_context')
-    processor = context.video_processor if context is not None else None
-    if processor is not None:
-        processor.close()
-
-
-def change_input_mode():
-    st.session_state['_input_mode'] = st.session_state['input_mode']
-    if st.session_state['_input_mode'] != 'Live camera':
-        revoke_live_camera()
-
-
-def change_camera_consent():
-    st.session_state['_camera_consent'] = st.session_state['live_consent']
-    if not st.session_state['_camera_consent']:
-        revoke_live_camera()
-
-
-def stop_live_camera():
-    context = st.session_state.get('_live_context')
-    if context is None:
-        st.session_state['_live_stopping'] = False
-        return
-    processor = context.video_processor
-    if processor is not None:
-        processor.close()
-    if context.state.playing or context.state.signalling:
-        st.session_state['_live_context'] = webrtc_streamer(
-            key=st.session_state['_live_component_key'], mode=WebRtcMode.SENDRECV,
-            rtc_configuration=st.session_state.get('_live_rtc'),
-            media_stream_constraints={'video': True, 'audio': False},
-            desired_playing_state=False, sendback_audio=False,
-            media_toggle_controls=False,
-        )
-    else:
-        st.session_state.pop('_live_context', None)
-        st.session_state['_live_stopping'] = False
-
-
-@st.fragment(run_every=0.5)
-def live_measurements(context, selected_skill):
-    if (st.session_state.get('_input_mode') != 'Live camera'
-            or not st.session_state.get('_camera_consent')
-            or st.session_state.get('_live_stopping')
-            or st.session_state.get('_live_context') is not context):
-        return
-    processor = context.video_processor
-    if processor is None:
-        st.info('Waiting for browser video. Press START and allow camera access; the first frame initializes the detector.')
-        return
-    snapshot = processor.snapshot()
-    if snapshot['error']:
-        st.session_state['_live_error'] = snapshot['error']
-        st.rerun(scope='app')
-    if snapshot['closed']:
-        st.info('Camera stopped. Press START for a new analysis.')
-        return
-    row, summary = snapshot['row'], snapshot['summary']
-    if row is None:
-        st.info('Waiting for the first analyzed frame…')
-        return
-    a, b, c = st.columns(3)
-    a.metric('Measured frames', f"{summary['measured_fraction']:.0%}")
-    b.metric('Live elapsed time', f"{summary['duration_s']:.1f} s")
-    if selected_skill == 'Handstand push-up':
-        c.metric('Full repetitions', summary['full_reps'])
-    else:
-        c.metric('Longest tracked posture', f"{summary['longest_tracked_posture_s']:.1f} s")
-    st.caption(f"Tracking status: {row['status']}. Latest processed frame: {row['time_s']:.2f} s.")
-    values = []
-    for key, label in METRICS.items():
-        value = row.get(key)
-        values.append({'Measurement': label, 'Latest value': f'{value:.2f}' if value is not None and math.isfinite(value) else '—'})
-    st.dataframe(values, hide_index=True, width='stretch')
+browser_camera = components.declare_component(
+    name='browser_camera', path=str(Path(__file__).parent / 'camera')
+)
 
 
 def live_camera(config):
     st.subheader('Live browser camera')
-    st.warning('On a hosted app, camera frames are sent to and processed on the app server. '
-               'Live video is not recorded or saved by this app. Microphone access is disabled. '
-               'Only use a camera view you consent to share with the server.')
-    st.caption('Use HTTPS (or localhost), then consent below, press START, and allow camera access. '
-               'STOP releases the detector; START begins a fresh analysis. Changing analysis settings '
-               'resets calibration, tracked time, and repetitions, even while the camera is running.')
-    with st.expander('Camera and connection troubleshooting'):
-        st.write('If permission is denied, enable camera access in your browser site settings and try again. '
-                 'Close other apps using the camera. Remote HTTP pages cannot access the camera: use HTTPS. '
-                 'If connection negotiation stalls or video never arrives, try a different network. '
-                 'The default STUN server is not sufficient on every network; the host may need TURN '
-                 'configured through ICE_SERVERS in environment variables or Streamlit secrets. '
-                 'ICE_SERVERS must be a JSON array of objects with urls and, for authenticated TURN, '
-                 'username and credential. TURN credentials are necessarily delivered to the browser; '
-                 'use restricted, short-lived credentials, not account API keys.')
-    st.session_state['live_consent'] = st.session_state.get('_camera_consent', False)
-    st.checkbox('I consent to send my camera frames to this app server.',
-                key='live_consent', on_change=change_camera_consent)
-    if not st.session_state.get('_camera_consent'):
-        stop_live_camera()
-        st.info('Camera access stays off until you consent and press START.')
-        return
-    if st.session_state.get('_live_stopping'):
-        stop_live_camera()
-        if st.session_state.get('_live_stopping'):
-            st.info('Stopping the previous camera connection. Wait for it to close before pressing START again.')
-            return
-    try:
-        raw_ice = os.environ.get('ICE_SERVERS')
-        if raw_ice is None:
-            try:
-                raw_ice = st.secrets.get('ICE_SERVERS')
-            except FileNotFoundError:
-                raw_ice = None
-        rtc = ice_configuration(raw_ice)
-    except (ValueError, TypeError) as exc:
-        stop_live_camera()
-        st.error(f'Live camera configuration error: {exc}')
-        return
-    st.session_state['_live_rtc'] = rtc
-    if st.session_state.get('_live_error'):
-        stop_live_camera()
-        st.error(st.session_state['_live_error'])
-        previous = st.session_state.get('_live_context')
-        stopping = previous is not None and (previous.state.playing or previous.state.signalling)
-        if st.button('Reset live analysis', disabled=stopping):
-            st.session_state.pop('_live_error', None)
-            st.rerun()
-        st.caption('After stopping, reset and press START to try again. Video upload remains available.')
-        return
-    try:
-        if not st.session_state.get('_live_model_ready'):
-            with st.spinner('Preparing the official MediaPipe pose model…'):
-                ensure_model()
-            st.session_state['_live_model_ready'] = True
-        previous = st.session_state.get('_live_context')
-        processor = previous.video_processor if previous is not None else None
-        if processor is not None:
-            processor.configure(config)
-        component_key = f"live-camera-{st.session_state.get('_live_generation', 0)}"
-        st.session_state['_live_component_key'] = component_key
-        context = webrtc_streamer(
-            key=component_key, mode=WebRtcMode.SENDRECV,
-            rtc_configuration=rtc,
-            video_processor_factory=lambda: LiveProcessor(config),
-            media_stream_constraints={
-                'video': {'width': {'ideal': 640}, 'height': {'ideal': 480},
-                          'frameRate': {'ideal': 15, 'max': 20}},
-                'audio': False,
-            },
-            async_processing=True, sendback_audio=False, media_toggle_controls=False,
-            video_html_attrs={'autoPlay': True, 'controls': False, 'muted': True},
-        )
-        st.session_state['_live_context'] = context
-    except Exception as exc:
-        stop_live_camera()
-        st.error(f'Could not start live camera: {exc}')
-        st.info('Check camera permission, HTTPS, and the connection guidance above, then try START again.')
-        return
-    st.caption('The returned video is annotated on the server. Inspect the overlay: confident landmarks '
-               'can still be wrong. Only the latest measurements are retained; there is no live recording or audio.')
-    live_measurements(context, config['skill'])
+    browser_camera(config=config, metrics=METRICS, key='browser-camera', default=None)
 
 st.set_page_config(page_title='Calisthenics Alignment Lab', layout='wide')
 st.title('Calisthenics Alignment Lab')
@@ -218,14 +56,11 @@ with st.expander('How to read the measurements'):
 config = {'skill':skill,'side':side,'variant':variant,'confidence':confidence,'detector_inverted':inverted,
           'mass_kg':mass if enabled and skill!='Handstand push-up' else 0,
           'torso_m':torso if enabled and skill!='Handstand push-up' else 0}
-st.session_state['input_mode'] = st.session_state.get('_input_mode', 'Video upload')
-st.session_state.setdefault('_input_mode', 'Video upload')
-st.radio('Input mode', ['Video upload', 'Live camera'], horizontal=True,
-         key='input_mode', on_change=change_input_mode)
-if st.session_state['_input_mode'] == 'Live camera':
+input_mode = st.radio('Input mode', ['Video upload', 'Live camera'],
+                      horizontal=True, key='input_mode')
+if input_mode == 'Live camera':
     live_camera(config)
 else:
-    stop_live_camera()
     st.caption('Uploaded clips are processed on the app server, which is remote when this app is hosted. '
                'Temporary processing files are deleted after analysis; results remain in this browser session’s server memory '
                'for preview and download. Upload only footage you consent to share with the host.')
